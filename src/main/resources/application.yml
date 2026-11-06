@@ -1,0 +1,47 @@
+# Default profile: fully offline. Three fake tenants of very different sizes, in three regions.
+server:
+  port: 8080
+
+demo:
+  global-max-concurrency: 4     # total mailbox calls in flight across ALL tenants
+  approval-threshold: 100       # actions touching more mailboxes than this need approval
+  fake-latency-ms: 300          # simulated Graph/Gmail call latency
+  action-max-attempts: 3        # then the action goes to the dead-letter queue
+  api-rate-limit:               # token bucket per customer on /api/tenants/{tenantId}/**
+    capacity: 50
+    refill-per-second: 20
+  shards:                       # routing table targets: one relational DB per shard, each in a region
+    - { id: DB1, region: US }
+    - { id: DB2, region: EU }
+    - { id: DB3, region: IN }
+    - { id: DB4, region: AU }
+  tenants:
+    - id: bigbank               # noisy tenant: 40 mailboxes
+      provider: FAKE
+      region: US
+      max-concurrency: 2
+      fake-mailbox-count: 40
+    - id: smallclinic           # small tenant: must not wait behind bigbank
+      provider: FAKE
+      region: EU
+      max-concurrency: 2
+      mailboxes:
+        - alice@smallclinic.example
+        - bob@smallclinic.example
+        - carol@smallclinic.example
+      distribution-lists:       # nested lists: all-staff -> alice + clinicians -> bob, carol
+        "[all-staff@smallclinic.example]": [ "alice@smallclinic.example", "clinicians@smallclinic.example" ]
+        "[clinicians@smallclinic.example]": [ "bob@smallclinic.example", "carol@smallclinic.example" ]
+      forwards:                 # external forwards are ignored: we only act inside the tenant
+        "[alice@smallclinic.example]": "alice.home@personal.example"
+    - id: retailco
+      provider: FAKE
+      region: IN
+      max-concurrency: 2
+      fake-mailbox-count: 5
+      forwards:                 # user1 auto-forwards to user2: user2's copy must be pulled too
+        "[user1@retailco.example]": "user2@retailco.example"
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %msg%n"

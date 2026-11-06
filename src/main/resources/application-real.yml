@@ -1,0 +1,26 @@
+# Profile "real": your two real mailboxes as two separate tenants.
+# Run with:  M365_TOKEN=... GMAIL_TOKEN=... mvn spring-boot:run -Dspring-boot.run.profiles=real
+# Tokens are delegated tokens for YOUR OWN account (valid ~1 hour). See README for how to get them.
+demo:
+  global-max-concurrency: 4
+  approval-threshold: 100
+  tenants:
+    - id: tenant-m365
+      provider: M365
+      max-concurrency: 2
+      access-token: ${M365_TOKEN:}
+      mailboxes:
+        - me        # personal outlook.com accounts only work as /me with a delegated token
+      #- id: tenant-google
+     # provider: GOOGLE
+      #max-concurrency: 2
+     # access-token: ${GMAIL_TOKEN:}
+     # mailboxes: [me]
+      # On-prem / hybrid Exchange via EWS (service account with ApplicationImpersonation):
+      #- id: tenant-exchange
+      #  provider: EXCHANGE
+      #  region: EU
+      #  max-concurrency: 2
+      #  ews-url: https://mail.example.com/EWS/Exchange.asmx
+      #  access-token: ${EXCHANGE_TOKEN:}
+      #  mailboxes: [ someone@example.com ]

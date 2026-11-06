@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mail Cleanup Admin</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1e1e1e; --muted:#5f6670; --line:#dde1e6; --bad:#c92a2a; --ok:#2b8a3e; --warn:#e67700; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16181c; --card:#1f2228; --fg:#e8eaed; --muted:#9aa0a6; --line:#33373e; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:16px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; flex:1; }
+  main { padding:16px; display:grid; gap:16px; max-width:1200px; margin:0 auto; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 16px; overflow-x:auto; }
+  h2 { font-size:15px; margin:4px 0 10px; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  .ACTIVE { color:var(--bad); font-weight:600; } .CLEARED, .FALSE_POSITIVE { color:var(--ok); font-weight:600; }
+  .hold { color:var(--warn); font-weight:600; }
+  button, select { font:inherit; padding:4px 10px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  .note { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mail cleanup admin (prototype)</h1>
+  <label>Customer <select id="tenant"></select></label>
+  <span class="note">Sign-in is delegated to the company login service (a dependency, not part of this demo).</span>
+</header>
+<main>
+  <section><h2>Metrics</h2><table id="metrics"></table></section>
+  <section><h2>Incidents (one per threat)</h2><table id="incidents"></table></section>
+  <section><h2>Messages (action is per message)</h2><table id="messages"></table></section>
+  <section><h2>Dead-letter queue</h2><table id="dlq"></table></section>
+  <section><h2>Routing table</h2><table id="routing"></table></section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const get = url => fetch(url).then(r => r.ok ? r.json() : Promise.reject(r.status));
+const post = url => fetch(url, { method: 'POST' }).then(refresh);
+const rows = (el, head, body) => { el.innerHTML = '<tr>' + head.map(h => `<th>${h}</th>`).join('') + '</tr>' + (body.join('') || `<tr><td colspan="${head.length}" class="note">none</td></tr>`); };
+
+async function init() {
+  const routing = await get('/api/routing');
+  $('tenant').innerHTML = Object.keys(routing.customers).map(t => `<option>${esc(t)}</option>`).join('');
+  $('tenant').onchange = refresh;
+  refresh();
+  setInterval(refresh, 2000);
+}
+
+async function refresh() {
+  const t = encodeURIComponent($('tenant').value);
+  try {
+    const [m, inc, msgs, dlq, routing] = await Promise.all([
+      get(`/api/tenants/${t}/metrics`), get(`/api/tenants/${t}/incidents`), get(`/api/tenants/${t}/messages`),
+      get(`/api/tenants/${t}/dead-letters`), get('/api/routing')]);
+    rows($('metrics'), ['metric', 'value'], Object.entries(m).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`));
+    rows($('incidents'), ['threat', 'status', 'messages', 'last updated', ''], inc.map(i => `<tr>
+      <td>${esc(i.threatId)}</td><td class="${esc(i.status)}">${esc(i.status)}</td><td>${i.messageIds.length}</td>
+      <td>${esc(i.lastUpdated)}</td>
+      <td>${i.awaitingApproval ? `<span class="hold">awaiting approval</span> <button data-approve="${esc(i.threatId)}">Approve</button>` : ''}</td></tr>`));
+    rows($('messages'), ['message', 'subject', 'status', 'threats', 'mailbox copies'], msgs.map(x => `<tr>
+      <td>${esc(x.messageId)}</td><td>${esc(x.subject)}</td><td class="${esc(x.status)}">${esc(x.status)}</td>
+      <td>${Object.entries(x.threats).map(([k, v]) => `${esc(k)}=<span class="${esc(v)}">${esc(v)}</span>`).join(', ')}</td>
+      <td>${Object.entries(x.mailboxes).map(([k, v]) => `${esc(k)}: ${esc(v.status)}`).join('<br>')}</td></tr>`));
+    rows($('dlq'), ['id', 'mailbox', 'action', 'ref', 'attempts', 'reason', ''], dlq.map(d => `<tr>
+      <td>${esc(d.id)}</td><td>${esc(d.mailbox)}</td><td>${esc(d.action)}</td><td>${esc(d.reference)}</td>
+      <td>${d.attempts}</td><td>${esc(d.reason)}</td><td><button data-replay="${esc(d.id)}">Replay</button></td></tr>`));
+    rows($('routing'), ['customer', 'shard', 'region'], Object.values(routing.customers).map(r =>
+      `<tr><td>${esc(r.tenantId)}</td><td>${esc(r.shard)}</td><td>${esc(r.region)}</td></tr>`));
+    document.querySelectorAll('[data-approve]').forEach(b => b.onclick = () => post(`/api/tenants/${t}/incidents/${encodeURIComponent(b.dataset.approve)}/approve`));
+    document.querySelectorAll('[data-replay]').forEach(b => b.onclick = () => post(`/api/tenants/${t}/dead-letters/${encodeURIComponent(b.dataset.replay)}/replay`));
+  } catch (status) {
+    if (status === 429) return; // rate limited: try again on the next tick
+  }
+}
+init();
+</script>
+</body>
+</html>
